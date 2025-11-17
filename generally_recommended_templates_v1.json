@@ -16,7 +16,10 @@
     "AWS Expiring Reserved Instances",
     "AWS Savings Plan Recommendations",
     "AWS Expiring Savings Plans",
-    "AWS Resources Under Extended Support"
+    "AWS Resources Under Extended Support",
+    "AWS Overutilized EC2 Instances",
+    "AWS Unused Classic Load Balancers",
+    "AWS Unused Network Load Balancers",
   ],
   "azure": [
     "Azure Rightsize Managed Disks",
@@ -33,7 +36,11 @@
     "Azure Reserved Instances Recommendations",
     "Azure Reserved Instances Utilization",
     "Azure Expiring Reserved Instances",
-    "Azure Savings Plan Recommendations"
+    "Azure Savings Plan Recommendations",
+    "Azure Overutilized Compute Instances",
+    "Azure Unused App Service Plans",
+    "Azure Unused Load Balancers",
+    "Azure Unused Volumes"
   ],
   "google": [
     "Google Old Snapshots",
@@ -41,6 +48,8 @@
     "Google Idle IP Address Recommender",
     "Google Committed Use Discount Recommender",
     "Google Rightsize VM Recommender",
-    "Google Idle Cloud SQL Instance Recommender"
+    "Google Idle Cloud SQL Instance Recommender",
+    "Google Expiring Committed Use Discounts (CUD)
+"
   ]
 }
