@@ -1,0 +1,606 @@
+###############################################################################
+# README
+###############################################################################
+# MSP - Apply Custom Policies
+#
+# Purpose:
+#   Recommend and optionally apply Flexera CCO onboarding policy templates per selected cloud providers.
+#   Creates an incident listing missing recommended templates and provides manual escalation to apply them.
+#
+# Key Features:
+#   - Detects missing recommended templates using fingerprint matching.
+#   - Supports AWS, Azure, Google, and Flexera templates.
+#   - Manual escalation: `esc_apply_policy_templates` applies missing templates via Flexera API.
+#   - Optional email escalation: `esc_email` sends notifications.
+#
+# Parameters:
+#   param_email       -> List of email addresses for notifications.
+#   cloud_providers   -> Cloud providers to include (AWS, Azure, Google).
+#
+# Workflow:
+#   1. Collect applied policies and published templates.
+#   2. Compare fingerprints to identify missing templates.
+#   3. Incident created if any recommended templates are missing.
+#   4. Manual escalation applies missing templates using catalog defaults.
+#
+#
+# Active Policy List:
+#   https://github.com/flexera-public/policy_templates/blob/master/data/active_policy_list/active_policy_list.json
+
+name "MSP - Apply Custom Policies"
+rs_pt_ver 20180301
+type "policy"
+short_description "Recommend and optionally apply Flexera CCO onboarding policy templates per cloud provider."
+long_description ""
+doc_link "https://github.com/flexera-public/policy_templates/tree/master/operational/flexera/cco/onboarding/"
+severity "low"
+default_frequency "weekly"
+category "Operational"
+info(
+  publish: "true",
+  version: "0.2.0",
+  provider: "Flexera",
+  service: "All",
+  policy_set: "N/A"
+)
+
+###############################################################################
+# Parameters
+###############################################################################
+
+parameter "param_email" do
+  type "list"
+  category "Policy Settings"
+  label "Email Addresses"
+  description "A list of email addresses to notify when recommended policy templates are missing."
+  default []
+end
+
+parameter "cloud_providers" do
+  type "list"
+  category "Policy Settings"
+  label "Cloud Providers"
+  description "Select one or more cloud providers to include when recommending CCO onboarding policy templates."
+  allowed_values ["AWS", "Azure", "Google"]
+  default ["AWS", "Azure", "Google"]
+end
+
+###############################################################################
+# Authentication
+###############################################################################
+credentials "auth_flexera" do
+  schemes "oauth2"
+  label "Flexera"
+  description "Flexera One OAuth2 credentials"
+  tags "provider=flexera"
+end
+
+
+###############################################################################
+# Pagination
+###############################################################################
+
+pagination "pagination_flexera" do
+  get_page_marker do
+    # Pagination provided by Flexera Engineering.  2024-07.  Maybe eventually a better way to implement..?
+    body_path jq(response, 'try(.nextPage | split("skipToken=") | .[1] | sub("%3D";"=";"g") | sub("%253D";"=";"g")) catch null') # The skipToken is url encoded, so we need to decode the %3D and %253D to = .  This is not ideal implementation this seems to be enough without a true urldecode function
+  end
+  set_page_marker do
+    query "skipToken"
+  end
+end
+
+###############################################################################
+# Datasources & Scripts
+###############################################################################
+
+# Region-specific Flexera API endpoints
+datasource "ds_flexera_api_hosts" do
+  run_script $js_flexera_api_hosts, rs_optima_host
+end
+
+script "js_flexera_api_hosts", type: "javascript" do
+  parameters "rs_optima_host"
+  result "result"
+  code <<-'EOS'
+  host_table = {
+    "api.optima.flexeraeng.com": {
+      ui: "app.flexera.com",
+      flexera: "api.flexera.com",
+      fsm: "api.fsm.flexeraeng.com"
+    },
+    "api.optima-eu.flexeraeng.com": {
+      ui: "app.flexera.eu",
+      flexera: "api.flexera.eu",
+      fsm: "api.fsm-eu.flexeraeng.com"
+    },
+    "api.optima-apac.flexeraeng.com": {
+      ui: "app.flexera.au",
+      flexera: "api.flexera.au",
+      fsm: "api.fsm-apac.flexeraeng.com"
+    }
+  }
+
+  result = host_table[rs_optima_host]
+EOS
+end
+
+# Get Applied Policy Details
+# Both Applied Policies and Policy Aggregates are required for this policy
+datasource "ds_applied_policies" do
+  request do
+    auth $auth_flexera
+    pagination $pagination_flexera
+    host val($ds_flexera_api_hosts, 'flexera')
+    path join(["/policy/v1/orgs/", rs_org_id, "/projects/", rs_project_id, "/applied-policies"])
+    query "limit", "5000"
+    query "view", "extended"
+  end
+  result do
+    collect jmes_path(response, "values[*]") do
+      field "id", jq(col_item, ".id")
+      field "policyAggregateId", jq(col_item, ".policyAggregateId")
+      field "name", jq(col_item, ".name")
+      field "info", jq(col_item, ".info")
+      field "policyTemplate", jq(col_item, ".policyTemplate")
+      field "publishedTemplate", jq(col_item, ".publishedTemplate")
+      field "metaParentPolicyId", jq(col_item, ".metaParentPolicyId")
+      field "options", jq(col_item, ".options")
+      field "status", jq(col_item, ".status")
+    end
+  end
+end
+
+# Incidents per Applied Policy (for linking if desired later)
+datasource "ds_applied_policies_incidents" do
+  request do
+    auth $auth_flexera
+    # (CHANGED) use the region-specific Flexera host we already resolved
+    host val($ds_flexera_api_hosts, 'flexera')
+    path join(["/api/governance/projects/", rs_project_id, "/incidents"])
+    query "state", "triggered"
+    header "User-Agent", "RS Policies"
+    header "Api-Version", "1.0"
+  end
+  result do
+    collect jmes_path(response, "items[*]") do
+      field "applied_policy_id", jq(col_item, ".applied_policy.id")
+      field "id", jq(col_item, ".id")
+      field "summary", jq(col_item, ".summary")
+    end
+  end
+end
+
+
+# Published Catalog Policy Template List
+datasource "ds_published_templates" do
+  request do
+    auth $auth_flexera
+    pagination $pagination_flexera
+    host val($ds_flexera_api_hosts, 'flexera')
+    path join(["/policy/v1/orgs/", rs_org_id, "/published-templates"])
+    query "limit", "5000"
+    query "view", "extended"
+  end
+  result do
+    collect jmes_path(response, "values[*]") do
+      field "id", jq(col_item, ".id")
+      field "name", jq(col_item, ".name")
+      field "ref", jq(col_item, ".ref")
+      field "builtIn", jq(col_item, ".builtIn")
+      field "fingerprint", jq(col_item, ".fingerprint")
+      field "policyTemplateFingerprint", jq(col_item, ".policyTemplateFingerprint")
+      field "info", jq(col_item, ".info")
+      field "credentials", jq(col_item, ".credentials")
+      field "updatedAt", jq(col_item, ".updatedAt")
+    end
+  end
+end
+
+###############################################################################
+# Recommended Policy Template Checks (ONLY)
+###############################################################################
+# Build "fail" list for recommended templates (missing applied policies)
+datasource "ds_result_fail_generally_recommended_templates" do
+  run_script $js_result_fail_generally_recommended_templates, $ds_applied_policies, $ds_published_templates, $ds_flexera_api_hosts, $cloud_providers, rs_org_id, rs_project_id
+end
+
+
+script "js_result_fail_generally_recommended_templates", type: "javascript" do
+  parameters "ds_applied_policies", "ds_published_templates", "ds_flexera_api_hosts", "cloud_providers", "rs_org_id", "rs_project_id"
+  result "check_results"
+  code <<-EOS
+  check_results = [];
+
+  // Normalize selected providers (AWS/Azure/Google)
+  var selected = cloud_providers;
+  if (!Array.isArray(selected)) { selected = [selected]; }
+  function isSelected(v) {
+    if (v === "aws")   { return selected.indexOf("AWS")   > -1; }
+    if (v === "azure") { return selected.indexOf("Azure") > -1; }
+    if (v === "google"){ return selected.indexOf("Google")> -1; }
+    return false;
+  }
+
+  // LOCAL recommended list (replaces GitHub JSON from original onboarding PT)
+  var recommended = {
+    flexera: [
+      "Flexera Automation Outdated Applied Policies",
+      "Cloud Bill Processing Error Notification",
+      "FinOps Dashboards"
+    ],
+    aws: [
+      "Meta Parent: AWS Rightsize EBS Volumes",
+      "Meta Parent: AWS Superseded EBS Volumes",
+      "Meta Parent: AWS Old Snapshots",
+      "Meta Parent: AWS Rightsize EC2 Instances",
+      "Meta Parent: AWS Superseded EC2 Instances",
+      "Meta Parent: AWS Rightsize RDS Instances",
+      "Meta Parent: AWS Unused IP Addresses",
+      "AWS Reserved Instances Recommendations",
+      "AWS Reserved Instances Utilization",
+      "AWS Expiring Reserved Instances",
+      "AWS Savings Plan Recommendations",
+      "AWS Expiring Savings Plans",
+      "AWS Resources Under Extended Support",
+      "Meta Parent: AWS Overutilized EC2 Instances",
+      "Meta Parent: AWS S3 Buckets Without Intelligent Tiering",
+      "Meta Parent: AWS Tag Cardinality Report",
+      "Meta Parent: AWS Unused Application Load Balancers",
+      "Meta Parent: AWS Unused Classic Load Balancers"
+    ],
+    azure: [
+      "Meta Parent: Azure Rightsize Managed Disks",
+      "Meta Parent: Azure Old Snapshots",
+      "Meta Parent: Azure Rightsize Compute Instances",
+      "Meta Parent: Azure Superseded Compute Instances",
+      "Meta Parent: Azure Rightsize SQL Databases",
+      "Meta Parent: Azure Rightsize SQL Database Storage",
+      "Meta Parent: Azure Unused IP Addresses",
+      "Meta Parent: Azure Hybrid Use Benefit for Windows Server",
+      "Meta Parent: Azure Hybrid Use Benefit for Linux Server",
+      "Meta Parent: Azure Hybrid Use Benefit for SQL",
+      "Meta Parent: Azure Rightsize NetApp Resources",
+      "Meta Parent: Azure Reserved Instances Recommendations",
+      "Azure Reserved Instances Utilization",
+      "Azure Expiring Reserved Instances",
+      "Meta Parent: Azure Savings Plan Recommendations",
+      "Meta Parent: Azure Untagged Resources",
+      "Meta Parent: Azure Tag Cardinality Report",
+      "Meta Parent: Azure Overutilized Compute Instances",
+      "Meta Parent: Azure Unused App Service Plans",
+      "Meta Parent: Azure Unused Load Balancers",
+      "Meta Parent: Azure Unused Volumes"
+    ],
+    google: [
+      "Meta Parent: Google Old Snapshots",
+      "Meta Parent: Google Idle Persistent Disk Recommender",
+      "Meta Parent: Google Idle IP Address Recommender",
+      "Meta Parent: Google Committed Use Discount Recommender",
+      "Meta Parent: Google Expiring Committed Use Discounts (CUD)",
+      "Meta Parent: Google Rightsize VM Recommender",
+      "Meta Parent: Google Idle Cloud SQL Instance Recommender",
+      "Meta Parent: Google Rightsize VM Instances",
+      "Meta Parent: Google Unlabeled Resources",
+      "Meta Parent: Google Unused Disks",
+      "Meta Parent: Google Cloud Storage Without Lifecycle Configuration",
+      "Meta Parent: Google Label Cardinality Report",
+      "Meta Parent: Google Unlabeled Resources"
+    ]
+  };
+
+  // Hostnames for building catalog links
+  var uiHost = ds_flexera_api_hosts.ui;
+
+  // Vendors to include (always include flexera when any cloud is selected)
+  var vendors = [];
+  if (selected.length > 0) { vendors.push("flexera"); }
+  if (isSelected("aws"))   { vendors.push("aws"); }
+  if (isSelected("azure")) { vendors.push("azure"); }
+  if (isSelected("google")){ vendors.push("google"); }
+// ------------------------------------------------------------------
+  // FIX #1: Build lookup of applied fingerprints using the fields that
+  // actually appear on applied policies (publishedTemplate.fingerprint
+  // and policyTemplate.fingerprint). We also include
+  // publishedTemplate.policyTemplateFingerprint defensively if present.
+  // ------------------------------------------------------------------
+  var appliedByFingerprint = {};
+  _.each(ds_applied_policies, function(ap) {
+    var fps = [];
+
+    if (ap.policyTemplate && ap.policyTemplate.fingerprint) {
+      fps.push(ap.policyTemplate.fingerprint);
+    }
+    if (ap.publishedTemplate && ap.publishedTemplate.fingerprint) {
+      fps.push(ap.publishedTemplate.fingerprint);
+    }
+    // Defensive include: some environments may populate this; your log shows they don't.
+    if (ap.publishedTemplate && ap.publishedTemplate.policyTemplateFingerprint) {
+      fps.push(ap.publishedTemplate.policyTemplateFingerprint);
+    }
+
+    _.each(fps, function(fp) {
+      if (fp) { appliedByFingerprint[fp] = true; }
+    });
+  });
+
+  // Index published templates by name to resolve fingerprints quickly
+  var publishedByName = {};
+  _.each(ds_published_templates, function(pt) {
+    if (pt && pt.name) { publishedByName[pt.name] = pt; }
+  });
+
+  // ------------------------------------------------------------------
+  // FIX #2: When resolving the fingerprint to check, prefer the
+  // published-template fingerprint (pt.fingerprint). Fall back to
+  // policyTemplateFingerprint for completeness.
+  // ------------------------------------------------------------------
+  _.each(vendors, function(vendor) {
+    var templates = recommended[vendor] || [];
+    _.each(templates, function(ptName) {
+      var pub = publishedByName[ptName] || null;
+
+      var fpCandidates = [];
+      if (pub) {
+        if (pub.fingerprint)                 { fpCandidates.push(pub.fingerprint); }
+        if (pub.policyTemplateFingerprint)   { fpCandidates.push(pub.policyTemplateFingerprint); }
+      }
+
+      var alreadyApplied = _.some(fpCandidates, function(fp) {
+        return !!appliedByFingerprint[fp];
+      });
+
+      if (!alreadyApplied) {
+        var ptCatalogId = (pub && pub.id) ? ("?templateId=" + pub.id) : "";
+        check_results.push({
+          id: ptName,    // keep as name so escalation/apply function remains unchanged
+          name: ptName,
+          severity: "medium",
+          result: "fail",
+          details: "The " + ptName + " policy is not applied. You can review and configure it in the Automation Catalog: https://" +
+                   uiHost + "/orgs/" + rs_org_id + "/automation/catalog" + ptCatalogId
+        });
+      }
+    });
+  });
+
+  EOS
+end
+
+
+###############################################################################
+# Results & Policy
+###############################################################################
+datasource "ds_result_fail" do
+  # Reuse the recommended templates fail list as the only result set
+  request do
+    # dummy request; we will not use it
+    host "example.com"
+    path "/"
+  end
+end
+
+policy "pol_result" do
+  # To Do: Recommended Policy Templates to apply
+  validate $ds_result_fail_generally_recommended_templates do
+    summary_template "MSP - Apply Custom Policy Templates"
+    detail_template <<-EOS
+# Apply Recommended Policy Templates
+The following recommended policy template(s) are not applied. Apply the most relevant items to increase visibility and optimization coverage.
+{{ range data -}}
+{{ .name }}
+{{ end -}}
+EOS
+
+    # Create an incident if there is at least one missing recommended template
+    check eq(size(data), 0)
+
+    export do
+      resource_level true
+      field "id" do
+        label "Policy Template Name"
+        path "name"
+      end
+    end
+
+    escalate $esc_apply_policy_templates
+    escalate $esc_email
+  end
+end
+
+###############################################################################
+# Escalations
+###############################################################################
+# Simple email escalation
+escalation "esc_email" do
+  automatic gt(size($param_email), 0)
+  label "Email"
+  description "Send an email with the onboarding recommendations."
+  email $param_email
+end
+
+# Apply Recommended Policy Templates via workflow-style function
+escalation "esc_apply_policy_templates" do
+  automatic false
+  label "Apply Recommended Policy Templates"
+  description "Apply the missing recommended policy templates."
+  run "create_applied_policies", data, rs_optima_host, rs_org_id, rs_project_id, rs_governance_host
+end
+
+###############################################################################
+# Cloud Workflow-style Functions (copied from original onboarding PT)
+###############################################################################
+define hostname_lookup($rs_optima_host, $service) return $hostname do
+  task_label("Starting lookup Flexera API Host: " + $rs_optima_host + " for service: " + $service)
+  $host_table = {
+    "api.optima.flexeraeng.com": {
+      "ui": "app.flexera.com",
+      "flexera": "api.flexera.com",
+      "fsm": "api.fsm.flexeraeng.com",
+      "login": "login.flexera.com"
+    },
+    "api.optima-eu.flexeraeng.com": {
+      "ui": "app.flexera.eu",
+      "flexera": "api.flexera.eu",
+      "fsm": "api.fsm-eu.flexeraeng.com",
+      "login": "login.flexera.eu"
+    },
+    "api.optima-apac.flexeraeng.com": {
+      "ui": "app.flexera.au",
+      "flexera": "api.flexera.au",
+      "fsm": "api.fsm-apac.flexeraeng.com",
+      "login": "login.flexera.au"
+    }
+  }
+  $hostname = $host_table[$rs_optima_host][$service]
+  task_label("Completed. Flexera API Host: " + $hostname)
+end
+
+# Create Applied Policies from the recommended list
+define create_applied_policies($data, $rs_optima_host, $rs_org_id, $rs_project_id, $rs_governance_host) return $responses do
+  call hostname_lookup($rs_optima_host, "flexera") retrieve $$flexera_api_host
+  $responses = []
+  $$debug = []
+
+  task_label("Get Published Templates")
+  # This only needs to be done once
+  $$published_templates = http_request(
+    auth: $$auth_flexera,
+    verb: "get",
+    https: true,
+    host: $$flexera_api_host,
+    href: join(["/policy/v1/orgs/", $rs_org_id, "/published-templates"]),
+    query_strings: {
+      "view": "extended",  # Extended view shows credentials
+      "limit": "5000"
+    }
+  )
+  $responses << $$published_templates
+
+  task_label("Get Credentials")
+  $$credentials = http_request(
+    auth: $$auth_flexera,
+    verb: "get",
+    https: true,
+    host: $$flexera_api_host,
+    href: join(["/cred/v2/projects/", $rs_project_id, "/credentials"])
+  )
+  $responses << $$credentials
+
+  # Loop through each item in the data
+  $item_index = 0
+  $item_total = size($data)
+  foreach $item in $data on_error: handle_error() do
+    # Increment the item index
+    $item_index = $item_index + 1
+    $status = to_s("("+$item_index+"/"+$item_total+")")
+    task_label("Processing item "+$status)
+    $$debug << to_json($item) # Helpful for debugging
+
+    # Get the Published Template that matches the name + is "built in"
+    $published_template = select($$published_templates["body"]["values"], { "name": $item["id"], "builtIn": true })
+    if size($published_template) == 0
+      raise "Published Template not found in Catalog: "+$item["id"]
+    end
+    # Select first item in array
+    $published_template = first($published_template)
+    task_label("Found Published Template: "+$published_template["name"])
+    $$debug << to_json($published_template) # Helpful for debugging
+
+    # For each credential on the PT, find the corresponding credential in the account
+    $cred_payload = {}
+    task_label("Loop through PT Credentials")
+    foreach $pt_cred_key in keys($published_template["credentials"]) do
+      $pt_cred = map($published_template, "credentials", $pt_cred_key)
+      task_label("Processing PT Credential: "+$pt_cred["name"])
+      # Select Provider value for this PT Credential
+      $pt_cred_provider = ""
+      foreach $pt_cred_tag in $pt_cred["tags"] do
+        if $pt_cred_tag["key"] == "provider"
+          $pt_cred_provider = $pt_cred_tag["value"]
+        end
+      end
+      $$debug << "pt_cred_provider="+to_json($pt_cred_provider) # Helpful for debugging
+
+      # Loop through Account Credentials
+      foreach $account_cred in $$credentials["body"]["values"] do
+        # Identify this Account Credentials Provider
+        foreach $account_cred_tag in $account_cred["tags"] do
+          if $account_cred_tag["key"] == "provider"
+            # Check if the credential provider matches the PT credential provider
+            # OR if the PT credential provider is "databricks", we can also use a "azure_rm" credential provider
+            if downcase($account_cred_tag["value"]) == downcase($pt_cred_provider) ||
+               ($pt_cred_provider == "databricks" && downcase($account_cred_tag["value"]) == "azure_rm")
+              $cred_name = $pt_cred["name"]
+              $cred_value = $account_cred["id"]
+              $cred_obj = { $cred_name: $cred_value }
+              $cred_payload = $cred_payload + $cred_obj
+            end
+          end
+        end
+      end
+    end
+    $$debug << "cred_payload="+to_json($cred_payload) # Helpful for debugging
+
+ # Create Applied Policy
+    task_label($status+" Creating Applied Policy with Catalog Policy Template: "+$published_template["name"]+" ("+$published_template["id"])+")"
+    $schedule = "FREQ="+upcase($published_template["defaultFrequency"])
+    # Convert "15 MINUTES" defaultFrequency to RRULE "FREQ=MINUTELY;INTERVAL=15"
+    if $schedule = "15 MINUTES"
+      $schedule = "FREQ=MINUTELY;INTERVAL=15"
+    end
+
+    $body = {
+      "name": $published_template["name"],
+      "description": $published_template["shortDescription"],
+      "templateRef": $published_template["ref"],
+      "dryRun": false,
+      "schedule": { "rrule": $schedule },
+      "credentials": $cred_payload
+    }
+    $$debug << to_json($body) # Helpful for debugging
+
+    $response = http_request(
+      auth: $$auth_flexera,
+      verb: "post",
+      https: true,
+      host: $$flexera_api_host,
+      href: join(["/policy/v1/orgs/", $rs_org_id, "/projects/", $rs_project_id, "/applied-policies"]),
+      body: $body
+    )
+    $responses << $response
+    $$debug << to_json({
+      "request": {
+        "summary": "post https://"+join([$$flexera_api_host, "/policy/v1/orgs/", $rs_org_id, "/projects/", $rs_project_id, "/applied-policies"]),
+        "body": $body
+      },
+      "response": $response,
+      "item": $item
+    })
+
+    task_label("Check that the response is expected")
+    if $response["code"] < 200 || $response["code"] >= 300
+      raise "Failed to create Applied Policy: "+$published_template["name"]+". Response code: "+$response["code"]+". Response body: "+to_json($response["body"])
+    end
+  end
+
+  # If we encountered any errors, use `raise` to mark the CWF process as errored
+  if inspect($$errors) != "null"
+    raise join($$errors, "\n")
+  end
+
+  # If we made it here, action completed successfully
+
+  task_label("Apply Catalog Policy successful: " +$published_template["name"])
+end
+
+# CWF function to handle errors
+define handle_error() do
+  if !$$errors
+    $$errors = []
+  end
+  $$errors << $_error["type"] + ": " + $_error["message"]
+  # We check for errors at the end, and raise them all together
+  # Skip errors handled by this definition
+  $_error_behavior = "skip"
+end
