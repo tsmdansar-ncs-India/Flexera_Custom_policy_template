@@ -1,6 +1,6 @@
 
 ################################################################################
-# README — Applied Policies Email Reset (Re‑Apply Workflow)
+# README — "Applied Policies - Update Policy Frequency (Reapplies policies)"
 #
 # PURPOSE
 #   Provides an operator workflow to update email recipients on existing
@@ -56,8 +56,8 @@
 ################################################################################
 
 
-name              "Applied Policies - Update Email Parameters (Reapplies policies)"
-short_description "List applied policies and enable updating email addresses. Will delete and reapply policies."
+name              "Applied Policies - Update Policy Frequency (Reapplies policies)"
+short_description "List applied policies and allow updating policy execution frequency. Will delete and reapply policies."
 rs_pt_ver         20180301
 type              "policy"
 severity          "low"
@@ -269,15 +269,16 @@ end
 
 escalation "esc_reapply" do
   automatic false
-  label "Re-apply Selected Policies With New Emails"
-  description "Enter new email addresses in the field below. This overwrites existing addresses."
+label "Re-apply Selected Policies With New Frequency"
+description "Enter a new policy execution frequency (RRULE). Existing schedule will be replaced."
+
 
   # Escalation-scoped input (NOT shown at Apply time)
-  parameter "param_new_email_csv" do
+  parameter "param_new_policy_schedule" do
     type        "string"
     category    "Actions"
-    label       "New Email Recipients (Comma-Separated)"
-    description "Enter emails separated by commas. Example: a@x.com,b@x.com"
+    label       "New Policy Frequency (RRULE)"
+    description "Example: FREQ=DAILY;INTERVAL=1"
   end
 
   run "cw_reapply",
@@ -285,7 +286,7 @@ escalation "esc_reapply" do
       rs_optima_host,
       rs_org_id,
       rs_project_id,
-      $param_new_email_csv
+      $param_new_policy_schedule
 end
 
 ################################################################################
@@ -293,7 +294,6 @@ end
 ################################################################################
 
 # Clean CSV: remove spaces, tabs, CR, and newlines (CW-safe)
-define csv_to_list_clean($csv) return $list do
   if $csv == "" || inspect($csv) == "null"
     $list = []
   else
@@ -344,7 +344,13 @@ end
 # CLOUD WORKFLOW - MAIN RE-APPLY FUNCTION
 ################################################################################
 
-define cw_reapply($rows, $rs_optima_host, $rs_org_id, $rs_project_id, $param_new_email_csv) do
+define cw_reapply(
+  $rows,
+  $rs_optima_host,
+  $rs_org_id,
+  $rs_project_id,
+  $param_new_policy_schedule
+) do
 
   # Determine Automation API host
   $flexera_api_host = "api.flexera.com"
@@ -355,8 +361,6 @@ define cw_reapply($rows, $rs_optima_host, $rs_org_id, $rs_project_id, $param_new
     $flexera_api_host = "api.flexera.au"
   end
 
-  # Convert incident CSV → cleaned email list
-  call csv_to_list_clean($param_new_email_csv) retrieve $email_list
 
   foreach $row in $rows do
     sub on_error: handle_error() do
@@ -393,14 +397,21 @@ define cw_reapply($rows, $rs_optima_host, $rs_org_id, $rs_project_id, $param_new
         raise "No templateRef found on applied policy"
       end
 
-      # RRULE normalization
+          # RRULE handling (frequency override only)
       $rrule = ""
-      if inspect($ap["schedule"]) != "null"
-        $rrule = to_s($ap["schedule"]["rrule"])
+      if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != ""
+        $rrule = to_s($param_new_policy_schedule)
+      else
+        if inspect($ap["schedule"]) != "null"
+          $rrule = to_s($ap["schedule"]["rrule"])
+        end
       end
+
+      # Normalize MINUTELY
       if $rrule == "FREQ=MINUTELY"
         $rrule = "FREQ=MINUTELY;INTERVAL=15"
       end
+
 
       # Copy credentials and options
       $creds = $ap["credentials"]
@@ -410,16 +421,13 @@ define cw_reapply($rows, $rs_optima_host, $rs_org_id, $rs_project_id, $param_new
 	end
 
 
-      # Overwrite email values in options[]
+ 	# Update policy schedule option (param_policy_schedule)
       $updated_opts = []
       foreach $opt in $orig_opts do
         $o = $opt
-        if size($email_list) > 0
-          if to_s($opt["name"]) == "param_email"
-            $o["value"] = $email_list
-          end
-          if to_s($opt["name"]) == "param_combined_incident_email"
-            $o["value"] = $email_list
+         if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != ""
+          if to_s($opt["name"]) == "param_policy_schedule"
+            $o["value"] = $rrule
           end
         end
         $updated_opts << $o
@@ -505,4 +513,5 @@ define handle_error() do
   end
   $$errors << $_error["type"] + ": " + $_error["message"]
   $_error_behavior = "skip"
+
 end
