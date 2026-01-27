@@ -142,9 +142,10 @@ define cw_reapply($rows, $param_new_policy_schedule) do
       end
 
       # Normalize MINUTELY
-      if $rrule == "FREQ=MINUTELY"
+      if $rrule == "FREQ=MINUTELY" then
         $rrule = "FREQ=MINUTELY;INTERVAL=15"
       end
+
 
 
       # Copy credentials and options
@@ -451,6 +452,7 @@ escalation "esc_reapply" do
       data,
       $param_new_policy_schedule
   end
+
 
 
 
