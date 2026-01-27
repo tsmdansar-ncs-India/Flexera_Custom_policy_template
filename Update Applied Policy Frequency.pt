@@ -84,6 +84,181 @@ parameter "param_email" do
 end
 
 ################################################################################
+# CLOUD WORKFLOW - MAIN RE-APPLY FUNCTION
+################################################################################
+
+define cw_reapply(
+  $rows,
+  $rs_optima_host,
+  $rs_org_id,
+  $rs_project_id,
+  $param_new_policy_schedule
+) do
+
+  # Determine Automation API host
+  $flexera_api_host = "api.flexera.com"
+  if $rs_optima_host == "api.optima-eu.flexeraeng.com"
+    $flexera_api_host = "api.flexera.eu"
+  end
+  if $rs_optima_host == "api.optima-apac.flexeraeng.com"
+    $flexera_api_host = "api.flexera.au"
+  end
+
+  foreach $row in $rows do
+    sub on_error: handle_error() do
+
+      # GET existing applied policy from Automation
+      $href_get = "/policy/v1/orgs/" + to_s($rs_org_id) +
+                  "/projects/" + to_s($rs_project_id) +
+                  "/applied-policies/" + to_s($row["id"])
+
+      $get_resp = http_request(
+        auth:  $$auth_flexera,
+        host:  $flexera_api_host,
+        href:  $href_get,
+        https: true,
+        verb:  "get"
+      )
+      if $get_resp["code"] < 200 || $get_resp["code"] >= 300
+        raise "GET failed: " + to_json($get_resp)
+      end
+
+      $ap = $get_resp["body"]
+
+      # Determine templateRef
+      $tmpl_ref = ""
+      if inspect($ap["publishedTemplate"]) != "null"
+        $tmpl_ref = to_s($ap["publishedTemplate"]["ref"])
+      end
+      if $tmpl_ref == "" || inspect($tmpl_ref) == "null"
+        if inspect($ap["policyTemplate"]) != "null"
+          $tmpl_ref = to_s($ap["policyTemplate"]["ref"])
+        end
+      end
+      if $tmpl_ref == "" || inspect($tmpl_ref) == "null"
+        raise "No templateRef found on applied policy"
+      end
+
+          # RRULE handling (frequency override only)
+      $rrule = ""
+      if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != ""
+        $rrule = to_s($param_new_policy_schedule)
+      else
+        if inspect($ap["schedule"]) != "null"
+          $rrule = to_s($ap["schedule"]["rrule"])
+        end
+      end
+
+      # Normalize MINUTELY
+      if $rrule == "FREQ=MINUTELY"
+        $rrule = "FREQ=MINUTELY;INTERVAL=15"
+      end
+
+
+      # Copy credentials and options
+      $creds = $ap["credentials"]
+      $orig_opts = []
+	if inspect($ap["options"]) != "null"
+	  $orig_opts = $ap["options"]
+	end
+
+
+ 	# Update policy schedule option (param_policy_schedule)
+      $updated_opts = []
+      foreach $opt in $orig_opts do
+        $o = $opt
+         if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != ""
+          if to_s($opt["name"]) == "param_policy_schedule"
+            $o["value"] = $rrule
+          end
+        end
+        $updated_opts << $o
+      end
+
+      # Create new applied policy
+      $post_body = {
+        "name":        to_s($ap["name"]),
+        "description": to_s($ap["description"]),
+        "templateRef": $tmpl_ref,
+        "dryRun":      false,
+        "schedule":    { "rrule": $rrule },
+        "credentials": $creds,
+        "options":     $updated_opts
+      }
+
+      $create_href = "/policy/v1/orgs/" + to_s($rs_org_id) +
+                     "/projects/" + to_s($rs_project_id) +
+                     "/applied-policies"
+
+      $post_resp = http_request(
+        auth:  $$auth_flexera,
+        host:  $flexera_api_host,
+        href:  $create_href,
+        https: true,
+        verb:  "post",
+        body:  $post_body
+      )
+
+      if $post_resp["code"] != 201
+        raise "Create failed: " + to_json($post_resp)
+      end
+
+      # DELETE the original (scope-aware)
+      if to_s($ap["scope"]) == "org"
+        # org-scoped → delete via policy-aggregates
+        $agg_id = ""
+        if inspect($ap["policyAggregateId"]) != "null"
+          $agg_id = to_s($ap["policyAggregateId"])
+        elsif inspect($ap["policyAggregate"]) != "null"
+          $agg_id = to_s($ap["policyAggregate"]["id"])
+        end
+        if $agg_id == "" || inspect($agg_id) == "null"
+          raise "Delete failed: org-scoped policy missing policyAggregateId"
+        end
+
+        $delete_href = "/policy/v1/orgs/" + to_s($rs_org_id) +
+                       "/policy-aggregates/" + $agg_id
+
+      else
+        # project-scoped → delete via project endpoint
+        $delete_href = "/policy/v1/orgs/" + to_s($rs_org_id) +
+                       "/projects/" + to_s($rs_project_id) +
+                       "/applied-policies/" + to_s($row["id"])
+      end
+
+      $del_resp = http_request(
+        auth:  $$auth_flexera,
+        host:  $flexera_api_host,
+        href:  $delete_href,
+        https: true,
+        verb:  "delete"
+      )
+
+      if $del_resp["code"] < 200 || $del_resp["code"] >= 300
+        raise "Delete failed: " + to_json($del_resp)
+      end
+    end
+  end
+
+  if inspect($$errors) != "null"
+    raise join($$errors, "\n")
+  end
+end
+
+################################################################################
+# ERROR HANDLER
+################################################################################
+
+define handle_error() do
+  if !$$errors
+    $$errors = []
+  end
+  $$errors << $_error["type"] + ": " + $_error["message"]
+  $_error_behavior = "skip"
+
+end
+
+################################################################################
 # AUTHENTICATION
 ################################################################################
 
@@ -289,180 +464,7 @@ description "Enter a new policy execution frequency (RRULE). Existing schedule w
       $param_new_policy_schedule
   end
 
-################################################################################
-# CLOUD WORKFLOW - MAIN RE-APPLY FUNCTION
-################################################################################
-
-define cw_reapply(
-  $rows,
-  $rs_optima_host,
-  $rs_org_id,
-  $rs_project_id,
-  $param_new_policy_schedule
-) do
-
-  # Determine Automation API host
-  $flexera_api_host = "api.flexera.com"
-  if $rs_optima_host == "api.optima-eu.flexeraeng.com"
-    $flexera_api_host = "api.flexera.eu"
-  end
-  if $rs_optima_host == "api.optima-apac.flexeraeng.com"
-    $flexera_api_host = "api.flexera.au"
-  end
 
 
-  foreach $row in $rows do
-    sub on_error: handle_error() do
-
-      # GET existing applied policy from Automation
-      $href_get = "/policy/v1/orgs/" + to_s($rs_org_id) +
-                  "/projects/" + to_s($rs_project_id) +
-                  "/applied-policies/" + to_s($row["id"])
-
-      $get_resp = http_request(
-        auth:  $$auth_flexera,
-        host:  $flexera_api_host,
-        href:  $href_get,
-        https: true,
-        verb:  "get"
-      )
-      if $get_resp["code"] < 200 || $get_resp["code"] >= 300
-        raise "GET failed: " + to_json($get_resp)
-      end
-
-      $ap = $get_resp["body"]
-
-      # Determine templateRef
-      $tmpl_ref = ""
-      if inspect($ap["publishedTemplate"]) != "null"
-        $tmpl_ref = to_s($ap["publishedTemplate"]["ref"])
-      end
-      if $tmpl_ref == "" || inspect($tmpl_ref) == "null"
-        if inspect($ap["policyTemplate"]) != "null"
-          $tmpl_ref = to_s($ap["policyTemplate"]["ref"])
-        end
-      end
-      if $tmpl_ref == "" || inspect($tmpl_ref) == "null"
-        raise "No templateRef found on applied policy"
-      end
-
-          # RRULE handling (frequency override only)
-      $rrule = ""
-      if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != ""
-        $rrule = to_s($param_new_policy_schedule)
-      else
-        if inspect($ap["schedule"]) != "null"
-          $rrule = to_s($ap["schedule"]["rrule"])
-        end
-      end
-
-      # Normalize MINUTELY
-      if $rrule == "FREQ=MINUTELY"
-        $rrule = "FREQ=MINUTELY;INTERVAL=15"
-      end
-
-
-      # Copy credentials and options
-      $creds = $ap["credentials"]
-      $orig_opts = []
-	if inspect($ap["options"]) != "null"
-	  $orig_opts = $ap["options"]
-	end
-
-
- 	# Update policy schedule option (param_policy_schedule)
-      $updated_opts = []
-      foreach $opt in $orig_opts do
-        $o = $opt
-         if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != ""
-          if to_s($opt["name"]) == "param_policy_schedule"
-            $o["value"] = $rrule
-          end
-        end
-        $updated_opts << $o
-      end
-
-      # Create new applied policy
-      $post_body = {
-        "name":        to_s($ap["name"]),
-        "description": to_s($ap["description"]),
-        "templateRef": $tmpl_ref,
-        "dryRun":      false,
-        "schedule":    { "rrule": $rrule },
-        "credentials": $creds,
-        "options":     $updated_opts
-      }
-
-      $create_href = "/policy/v1/orgs/" + to_s($rs_org_id) +
-                     "/projects/" + to_s($rs_project_id) +
-                     "/applied-policies"
-
-      $post_resp = http_request(
-        auth:  $$auth_flexera,
-        host:  $flexera_api_host,
-        href:  $create_href,
-        https: true,
-        verb:  "post",
-        body:  $post_body
-      )
-
-      if $post_resp["code"] != 201
-        raise "Create failed: " + to_json($post_resp)
-      end
-
-      # DELETE the original (scope-aware)
-      if to_s($ap["scope"]) == "org"
-        # org-scoped → delete via policy-aggregates
-        $agg_id = ""
-        if inspect($ap["policyAggregateId"]) != "null"
-          $agg_id = to_s($ap["policyAggregateId"])
-        elsif inspect($ap["policyAggregate"]) != "null"
-          $agg_id = to_s($ap["policyAggregate"]["id"])
-        end
-        if $agg_id == "" || inspect($agg_id) == "null"
-          raise "Delete failed: org-scoped policy missing policyAggregateId"
-        end
-
-        $delete_href = "/policy/v1/orgs/" + to_s($rs_org_id) +
-                       "/policy-aggregates/" + $agg_id
-
-      else
-        # project-scoped → delete via project endpoint
-        $delete_href = "/policy/v1/orgs/" + to_s($rs_org_id) +
-                       "/projects/" + to_s($rs_project_id) +
-                       "/applied-policies/" + to_s($row["id"])
-      end
-
-      $del_resp = http_request(
-        auth:  $$auth_flexera,
-        host:  $flexera_api_host,
-        href:  $delete_href,
-        https: true,
-        verb:  "delete"
-      )
-
-      if $del_resp["code"] < 200 || $del_resp["code"] >= 300
-        raise "Delete failed: " + to_json($del_resp)
-      end
-    end
-  end
-
-  if inspect($$errors) != "null"
-    raise join($$errors, "\n")
-  end
-end
-
-################################################################################
-# ERROR HANDLER
-################################################################################
-
-define handle_error() do
-  if !$$errors
-    $$errors = []
-  end
-  $$errors << $_error["type"] + ": " + $_error["message"]
-  $_error_behavior = "skip"
-
-end
 
 
