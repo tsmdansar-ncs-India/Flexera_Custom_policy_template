@@ -157,23 +157,21 @@ define cw_reapply(
 
       # Copy credentials and options
       $creds = $ap["credentials"]
-      $orig_opts = []
-	if inspect($ap["options"]) != "null"
-	  $orig_opts = $ap["options"]
-	end
-
-
- 	# Update policy schedule option (param_policy_schedule)
-      $updated_opts = []
-      foreach $opt in $orig_opts do
-        $o = $opt
-         if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != ""
-          if to_s($opt["name"]) == "param_policy_schedule"
-            $o["value"] = $rrule
-          end
+        $orig_opts = []
+        if inspect($ap["options"]) != "null"
+           $orig_opts = $ap["options"]
         end
-        $updated_opts << $o
-      end
+
+	  $updated_opts = []
+	  foreach $opt in $orig_opts do
+	    $o = $opt
+	    if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != ""
+	      if to_s($opt["name"]) == "param_policy_schedule"
+	        $o["value"] = $rrule
+	      end
+	    end
+	    $updated_opts << $o
+	  end
 
       # Create new applied policy
       $post_body = {
@@ -444,8 +442,8 @@ end
 
 escalation "esc_reapply" do
   automatic false
-label "Re-apply Selected Policies With New Frequency"
-description "Enter a new policy execution frequency (RRULE). Existing schedule will be replaced."
+  label "Re-apply Selected Policies With New Frequency"
+  description "Enter a new policy execution frequency (RRULE). Existing schedule will be replaced."
 
 
   # Escalation-scoped input (NOT shown at Apply time)
@@ -457,12 +455,13 @@ description "Enter a new policy execution frequency (RRULE). Existing schedule w
   end
 
   run "cw_reapply",
-      data,
+   	  $ds_common,
       rs_optima_host,
       rs_org_id,
       rs_project_id,
       $param_new_policy_schedule
   end
+
 
 
 
