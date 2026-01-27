@@ -157,16 +157,16 @@ define cw_reapply($rows, $rs_optima_host, $rs_org_id, $rs_project_id, $param_new
     end
 
       # Overwrite schedule policy values in options[]
-	  $updated_opts = []
-	  foreach $opt in $orig_opts do
-	    $o = $opt
-	    if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != ""
-	      if to_s($opt["name"]) == "param_policy_schedule"
-	        $o["value"] = $rrule
-	      end
-	    end
-	    $updated_opts << $o
-	  end
+      $updated_opts = []
+      foreach $opt in $orig_opts do
+        $o = $opt
+        if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != ""
+          if to_s($opt["name"]) == "param_policy_schedule"
+            $o["value"] = $rrule
+          end
+        end
+        $updated_opts << $o
+      end
 
       # Create new applied policy
       $post_body = {
@@ -456,6 +456,7 @@ escalation "esc_reapply" do
       rs_project_id,
       $param_new_policy_schedule
   end
+
 
 
 
