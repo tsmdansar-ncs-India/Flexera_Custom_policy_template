@@ -450,17 +450,9 @@ escalation "esc_reapply" do
   end
 
   run "cw_reapply",
-      data,
+      val($ds_common),
       rs_optima_host,
       rs_org_id,
       rs_project_id,
       $param_new_policy_schedule
   end
-
-
-
-
-
-
-
-
