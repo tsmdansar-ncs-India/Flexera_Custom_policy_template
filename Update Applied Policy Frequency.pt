@@ -112,7 +112,7 @@ define cw_reapply($rows, $param_new_policy_schedule) do
         https: true,
         verb:  "get"
       )
-      if $get_resp["code"] < 200 || $get_resp["code"] >= 300
+      if $get_resp["code"] < 200 || $get_resp["code"] >= 300 then
         raise "GET failed: " + to_json($get_resp)
       end
 
@@ -120,11 +120,11 @@ define cw_reapply($rows, $param_new_policy_schedule) do
 
       # Determine templateRef
       $tmpl_ref = ""
-      if inspect($ap["publishedTemplate"]) != "null"
+      if inspect($ap["publishedTemplate"]) != "null" then
         $tmpl_ref = to_s($ap["publishedTemplate"]["ref"])
       end
-      if $tmpl_ref == "" || inspect($tmpl_ref) == "null"
-        if inspect($ap["policyTemplate"]) != "null"
+      if $tmpl_ref == "" || inspect($tmpl_ref) == "null" then
+        if inspect($ap["policyTemplate"]) != "null" then
           $tmpl_ref = to_s($ap["policyTemplate"]["ref"])
         end
       end
@@ -151,7 +151,7 @@ define cw_reapply($rows, $param_new_policy_schedule) do
       # Copy credentials and options
       $creds = $ap["credentials"]
       $orig_opts = []
-    if inspect($ap["options"]) != "null"
+    if inspect($ap["options"]) != "null" then
       $orig_opts = $ap["options"]
     end
 
@@ -159,8 +159,8 @@ define cw_reapply($rows, $param_new_policy_schedule) do
       $updated_opts = []
       foreach $opt in $orig_opts do
         $o = $opt
-        if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != ""
-          if to_s($opt["name"]) == "param_policy_schedule"
+        if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != "" then
+          if to_s($opt["name"]) == "param_policy_schedule" then
             $o["value"] = $rrule
           end
         end
@@ -191,7 +191,7 @@ define cw_reapply($rows, $param_new_policy_schedule) do
         body:  $post_body
       )
 
-      if $post_resp["code"] != 201
+      if $post_resp["code"] != 201 then
         raise "Create failed: " + to_json($post_resp)
       end
 
@@ -226,7 +226,7 @@ define cw_reapply($rows, $param_new_policy_schedule) do
         verb:  "delete"
       )
 
-      if $del_resp["code"] < 200 || $del_resp["code"] >= 300
+      if $del_resp["code"] < 200 || $del_resp["code"] >= 300 then
         raise "Delete failed: " + to_json($del_resp)
       end
     end
@@ -452,6 +452,7 @@ escalation "esc_reapply" do
       data,
       $param_new_policy_schedule
   end
+
 
 
 
