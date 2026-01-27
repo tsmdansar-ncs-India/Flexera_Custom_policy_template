@@ -87,7 +87,7 @@ end
 # CLOUD WORKFLOW - MAIN RE-APPLY FUNCTION
 ################################################################################
 
-define cw_reapply($rows, $rs_org_id, $rs_project_id, $param_new_policy_schedule) do
+define cw_reapply($rows, $rs_optima_host, $rs_org_id, $rs_project_id, $param_new_email_csv) do
 
   # Determine Automation API host
   $flexera_api_host = "api.flexera.com"
@@ -455,6 +455,7 @@ escalation "esc_reapply" do
       rs_project_id,
       $param_new_policy_schedule
   end
+
 
 
 
