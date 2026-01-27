@@ -1,0 +1,508 @@
+
+################################################################################
+# README — Applied Policies Email Reset (Re‑Apply Workflow)
+#
+# PURPOSE
+#   Provides an operator workflow to update email recipients on existing
+#   applied policies without editing parameters at apply time.
+#
+#   Governance "options[]" is read‑only after a policy is applied. To update
+#   email recipients, this template:
+#     1. Discovers applied policies via the Governance API.
+#     2. Lets operators select policies in the incident table.
+#     3. Prompts for *new email addresses only at Run Action time*.
+#     4. Re‑applies each selected policy by:
+#           - GET     the existing applied policy
+#           - POST    a replacement applied policy with updated email fields
+#           - DELETE  the original (scope‑aware: project vs org)
+#
+# WHAT GETS UPDATED
+#   Only these option keys are modified:
+#     - param_email
+#     - param_combined_incident_email
+#
+#   All other properties are preserved exactly, including:
+#     - templateRef (publishedTemplate or policyTemplate)
+#     - schedule (RRULE, with MINUTELY normalization)
+#     - credentials
+#     - all non‑email option values
+#     - applied policy scope (project or org)
+#
+# EMAIL INPUT BEHAVIOR
+#   This template does NOT require email input at "Apply" time.
+#   Operators are prompted only when running the escalation action:
+#       "Re‑Apply Selected Policies With New Emails"
+#   The input is a comma‑separated string, cleaned using Cloud Workflow‑safe
+#   logic (spaces, tabs, CR/LF removed).
+#
+# PERMISSIONS
+#   The credential used must have:
+#     - governance:applied_policy:update
+#     - common:project:own
+#     - common:org:own
+#
+# REGION SUPPORT
+#   Resolves correct Automation + Governance hosts from rs_optima_host.
+#     - NAM   → api.flexera.com     / governance‑3.rightscale.com
+#     - EU    → api.flexera.eu      / governance‑4.rightscale.com
+#     - APAC  → api.flexera.au      / governance‑10.rightscale.com
+#
+# NOTES
+#   - Child/meta‑children applied policies are excluded from inventory.
+#   - Run action is safe to execute on individual or multiple rows.
+#   - If an earlier version stored the email input as a policy parameter,
+#     delete and re‑apply this template so the Run Action input displays.
+#
+################################################################################
+
+
+name              "Applied Policies - Update Email Parameters (Reapplies policies)"
+short_description "List applied policies and enable updating email addresses. Will delete and reapply policies."
+rs_pt_ver         20180301
+type              "policy"
+severity          "low"
+category          "Operational"
+default_frequency "weekly"
+
+info(
+  publish:      "true",
+  provider:     "Flexera",
+  service:      "All",
+  policy_set:   "N/A",
+  version:      "3.2.2"
+)
+
+################################################################################
+# PARAMETERS
+################################################################################
+
+# Report recipients (optional inventory email; not used for reapply)
+parameter "param_email" do
+  type   "list"
+  label  "Send Report To"
+  default []
+end
+
+################################################################################
+# AUTHENTICATION
+################################################################################
+
+credentials "auth_flexera" do
+  schemes     "oauth2"
+  label       "Flexera"
+  description "Flexera One OAuth2 credential"
+  tags        "provider=flexera"
+end
+
+################################################################################
+# GOVERNANCE HOST RESOLUTION
+################################################################################
+
+script "js_governance_host", type: "javascript" do
+  parameters "rs_optima_host"
+  result "result"
+  code <<-'EOS'
+    var map = {
+      "api.optima.flexeraeng.com":     { governance: "governance-3.rightscale.com" },
+      "api.optima-eu.flexeraeng.com":  { governance: "governance-4.rightscale.com" },
+      "api.optima-apac.flexeraeng.com":{ governance: "governance-10.rightscale.com" }
+    };
+    result = map[rs_optima_host] || { governance: "governance-3.rightscale.com" };
+  EOS
+end
+
+datasource "ds_governance_host" do
+  run_script $js_governance_host, rs_optima_host
+end
+
+################################################################################
+# DISCOVERY - GOVERNANCE applied_policies WITH options[]
+################################################################################
+
+datasource "ds_applied_policies_all" do
+  request do
+    auth   $auth_flexera
+    host   val($ds_governance_host, "governance")
+    path   join(["/api/governance/projects/", rs_project_id, "/applied_policies"])
+    header "Api-Version", "1.0"
+  end
+
+  result do
+    collect jmes_path(response, "items[*]") do
+      field "id",                        jmes_path(col_item, "id")
+      field "name",                      jmes_path(col_item, "name")
+      field "status",                    jmes_path(col_item, "status")
+      field "category",                  jmes_path(col_item, "category")
+      field "options",                   jmes_path(col_item, "options")
+      field "parent_applied_policy_id",  jmes_path(col_item, "parent_applied_policy_id")
+      field "parent",                    jmes_path(col_item, "parent")
+      field "policy_aggregate_id",       jmes_path(col_item, "policy_aggregate_id")
+      field "incident_aggregate_id",     jmes_path(col_item, "incident_aggregate_id")
+    end
+  end
+end
+
+################################################################################
+# REMOVE CHILD POLICIES (meta children)
+################################################################################
+
+script "js_exclude_children", type: "javascript" do
+  parameters "items"
+  result     "result"
+  code <<-'EOS'
+    function hasValue(v) {
+      return !(v === null || v === undefined || v === "" ||
+               (Array.isArray(v) && v.length === 0));
+    }
+    var P = ["parent_applied_policy_id","parent","metaParentPolicyId","meta_parent_id","parent_id"];
+    result = (items||[]).filter(function(x){
+      for (var i=0;i<P.length;i++){
+        if (hasValue(x[P[i]])) return false;
+      }
+      return true;
+    });
+  EOS
+end
+
+datasource "ds_applied_policies" do
+  run_script $js_exclude_children, $ds_applied_policies_all
+end
+
+################################################################################
+# EXTRACT COMMON PARAMETER VALUES (flatten options)
+################################################################################
+
+script "js_extract_common_options", type: "javascript" do
+  parameters "items"
+  result "result"
+  code <<-'EOS'
+    function pick(opts,k){
+      if(!Array.isArray(opts)) return "";
+      for(var i=0;i<opts.length;i++){
+        var o=opts[i]||{};
+        if((o.name||"")===k){
+          var v=o.value;
+          if(Array.isArray(v)) return v.join(",");
+          return v==null ? "" : String(v);
+        }
+      }
+      return "";
+    }
+
+    var KEYS=[
+      "param_email",
+      "param_combined_incident_email",
+      "param_policy_schedule",
+      "param_template_source",
+      "param_min_savings",
+      "param_stats_lookback",
+      "param_stats_interval",
+      "param_stats_threshold",
+      "param_regions_allow_or_deny",
+      "param_regions_list",
+      "param_exclusion_tags_boolean",
+      "param_exclusion_tags",
+      "param_dimension_filter_includes",
+      "param_dimension_filter_excludes",
+      "param_azure_endpoint",
+      "param_ignore_list",
+      "param_processing_limit",
+      "cloud_providers"
+    ];
+
+    var out=[];
+    (items||[]).forEach(function(x){
+      var row={ id:x.id||"", name:x.name||"", status:x.status||"" };
+      KEYS.forEach(function(k){ row[k]=pick(x.options||[],k); });
+      out.push(row);
+    });
+    result = out;
+  EOS
+end
+
+datasource "ds_common" do
+  run_script $js_extract_common_options, $ds_applied_policies
+end
+
+################################################################################
+# INCIDENT - INVENTORY TABLE + ACTIONS
+################################################################################
+
+policy "pol_inventory" do
+  validate $ds_common do
+    summary_template "Applied Policies ({{len data}}) - Commonly Used Parameters"
+    detail_template  ""
+    check eq(size(data), 0)
+
+    export do
+      resource_level true
+      field "id"     do path "id"     end
+      field "name"   do path "name"   end
+      field "status" do path "status" end
+      field "param_email" do path "param_email" end
+      field "param_combined_incident_email" do path "param_combined_incident_email" end
+      field "param_template_source" do path "param_template_source" end
+      field "param_policy_schedule" do path "param_policy_schedule" end
+      field "param_min_savings" do path "param_min_savings" end
+      field "param_stats_interval" do path "param_stats_interval" end
+      field "param_stats_lookback" do path "param_stats_lookback" end
+      field "param_regions_allow_or_deny" do path "param_regions_allow_or_deny" end
+      field "param_exclusion_tags" do path "param_exclusion_tags" end
+      field "param_ignore_list" do path "param_ignore_list" end
+      field "cloud_providers" do path "cloud_providers" end
+    end
+
+    escalate $esc_email
+    escalate $esc_reapply
+  end
+end
+
+################################################################################
+# ESCALATIONS
+################################################################################
+
+escalation "esc_email" do
+  automatic gt(size($param_email), 0)
+  label "Send Report"
+  email $param_email
+end
+
+escalation "esc_reapply" do
+  automatic false
+  label "Re-apply Selected Policies With New Emails"
+  description "Enter new email addresses in the field below. This overwrites existing addresses."
+
+  # Escalation-scoped input (NOT shown at Apply time)
+  parameter "param_new_email_csv" do
+    type        "string"
+    category    "Actions"
+    label       "New Email Recipients (Comma-Separated)"
+    description "Enter emails separated by commas. Example: a@x.com,b@x.com"
+  end
+
+  run "cw_reapply",
+      data,
+      rs_optima_host,
+      rs_org_id,
+      rs_project_id,
+      $param_new_email_csv
+end
+
+################################################################################
+# CLOUD WORKFLOW HELPERS
+################################################################################
+
+# Clean CSV: remove spaces, tabs, CR, and newlines (CW-safe)
+define csv_to_list_clean($csv) return $list do
+  if $csv == "" || inspect($csv) == "null"
+    $list = []
+  else
+    $list = []
+    foreach $tok in split($csv, ",") do
+      $t = to_s($tok)
+
+      # remove spaces
+      $tmp_space = ""
+      foreach $p in split($t, " ") do
+        if $p != ""
+          $tmp_space = $tmp_space + $p
+        end
+      end
+
+      # remove tabs
+      $tmp_tab = ""
+      foreach $p2 in split($tmp_space, "\t") do
+        if $p2 != ""
+          $tmp_tab = $tmp_tab + $p2
+        end
+      end
+
+      # remove carriage returns
+      $tmp_cr = ""
+      foreach $p3 in split($tmp_tab, "\r") do
+        if $p3 != ""
+          $tmp_cr = $tmp_cr + $p3
+        end
+      end
+
+      # remove newlines
+      $clean = ""
+      foreach $p4 in split($tmp_cr, "\n") do
+        if $p4 != ""
+          $clean = $clean + $p4
+        end
+      end
+
+      if $clean != ""
+        $list << $clean
+      end
+    end
+  end
+end
+
+################################################################################
+# CLOUD WORKFLOW - MAIN RE-APPLY FUNCTION
+################################################################################
+
+define cw_reapply($rows, $rs_optima_host, $rs_org_id, $rs_project_id, $param_new_email_csv) do
+
+  # Determine Automation API host
+  $flexera_api_host = "api.flexera.com"
+  if $rs_optima_host == "api.optima-eu.flexeraeng.com"
+    $flexera_api_host = "api.flexera.eu"
+  end
+  if $rs_optima_host == "api.optima-apac.flexeraeng.com"
+    $flexera_api_host = "api.flexera.au"
+  end
+
+  # Convert incident CSV → cleaned email list
+  call csv_to_list_clean($param_new_email_csv) retrieve $email_list
+
+  foreach $row in $rows do
+    sub on_error: handle_error() do
+
+      # GET existing applied policy from Automation
+      $href_get = "/policy/v1/orgs/" + to_s($rs_org_id) +
+                  "/projects/" + to_s($rs_project_id) +
+                  "/applied-policies/" + to_s($row["id"])
+
+      $get_resp = http_request(
+        auth:  $$auth_flexera,
+        host:  $flexera_api_host,
+        href:  $href_get,
+        https: true,
+        verb:  "get"
+      )
+      if $get_resp["code"] < 200 || $get_resp["code"] >= 300
+        raise "GET failed: " + to_json($get_resp)
+      end
+
+      $ap = $get_resp["body"]
+
+      # Determine templateRef
+      $tmpl_ref = ""
+      if inspect($ap["publishedTemplate"]) != "null"
+        $tmpl_ref = to_s($ap["publishedTemplate"]["ref"])
+      end
+      if $tmpl_ref == "" || inspect($tmpl_ref) == "null"
+        if inspect($ap["policyTemplate"]) != "null"
+          $tmpl_ref = to_s($ap["policyTemplate"]["ref"])
+        end
+      end
+      if $tmpl_ref == "" || inspect($tmpl_ref) == "null"
+        raise "No templateRef found on applied policy"
+      end
+
+      # RRULE normalization
+      $rrule = ""
+      if inspect($ap["schedule"]) != "null"
+        $rrule = to_s($ap["schedule"]["rrule"])
+      end
+      if $rrule == "FREQ=MINUTELY"
+        $rrule = "FREQ=MINUTELY;INTERVAL=15"
+      end
+
+      # Copy credentials and options
+      $creds = $ap["credentials"]
+      $orig_opts = []
+	if inspect($ap["options"]) != "null"
+	  $orig_opts = $ap["options"]
+	end
+
+
+      # Overwrite email values in options[]
+      $updated_opts = []
+      foreach $opt in $orig_opts do
+        $o = $opt
+        if size($email_list) > 0
+          if to_s($opt["name"]) == "param_email"
+            $o["value"] = $email_list
+          end
+          if to_s($opt["name"]) == "param_combined_incident_email"
+            $o["value"] = $email_list
+          end
+        end
+        $updated_opts << $o
+      end
+
+      # Create new applied policy
+      $post_body = {
+        "name":        to_s($ap["name"]),
+        "description": to_s($ap["description"]),
+        "templateRef": $tmpl_ref,
+        "dryRun":      false,
+        "schedule":    { "rrule": $rrule },
+        "credentials": $creds,
+        "options":     $updated_opts
+      }
+
+      $create_href = "/policy/v1/orgs/" + to_s($rs_org_id) +
+                     "/projects/" + to_s($rs_project_id) +
+                     "/applied-policies"
+
+      $post_resp = http_request(
+        auth:  $$auth_flexera,
+        host:  $flexera_api_host,
+        href:  $create_href,
+        https: true,
+        verb:  "post",
+        body:  $post_body
+      )
+
+      if $post_resp["code"] != 201
+        raise "Create failed: " + to_json($post_resp)
+      end
+
+      # DELETE the original (scope-aware)
+      if to_s($ap["scope"]) == "org"
+        # org-scoped → delete via policy-aggregates
+        $agg_id = ""
+        if inspect($ap["policyAggregateId"]) != "null"
+          $agg_id = to_s($ap["policyAggregateId"])
+        elsif inspect($ap["policyAggregate"]) != "null"
+          $agg_id = to_s($ap["policyAggregate"]["id"])
+        end
+        if $agg_id == "" || inspect($agg_id) == "null"
+          raise "Delete failed: org-scoped policy missing policyAggregateId"
+        end
+
+        $delete_href = "/policy/v1/orgs/" + to_s($rs_org_id) +
+                       "/policy-aggregates/" + $agg_id
+
+      else
+        # project-scoped → delete via project endpoint
+        $delete_href = "/policy/v1/orgs/" + to_s($rs_org_id) +
+                       "/projects/" + to_s($rs_project_id) +
+                       "/applied-policies/" + to_s($row["id"])
+      end
+
+      $del_resp = http_request(
+        auth:  $$auth_flexera,
+        host:  $flexera_api_host,
+        href:  $delete_href,
+        https: true,
+        verb:  "delete"
+      )
+
+      if $del_resp["code"] < 200 || $del_resp["code"] >= 300
+        raise "Delete failed: " + to_json($del_resp)
+      end
+    end
+  end
+
+  if inspect($$errors) != "null"
+    raise join($$errors, "\n")
+  end
+end
+
+################################################################################
+# ERROR HANDLER
+################################################################################
+
+define handle_error() do
+  if !$$errors
+    $$errors = []
+  end
+  $$errors << $_error["type"] + ": " + $_error["message"]
+  $_error_behavior = "skip"
+end
