@@ -45,7 +45,7 @@
 #   Resolves correct Automation + Governance hosts from rs_optima_host.
 #     - NAM   → api.flexera.com     / governance‑3.rightscale.com
 #     - EU    → api.flexera.eu      / governance‑4.rightscale.com
-#     - APAC  → api.flexera.au      / governance‑10.rightscale.com
+#     - APAC  → api.flexera.au      / governance‑3.rightscale.com
 #
 # NOTES
 #   - Child/meta‑children applied policies are excluded from inventory.
@@ -273,7 +273,7 @@ script "js_governance_host", type: "javascript" do
     var map = {
       "api.optima.flexeraeng.com":     { governance: "governance-3.rightscale.com" },
       "api.optima-eu.flexeraeng.com":  { governance: "governance-4.rightscale.com" },
-      "api.optima-apac.flexeraeng.com":{ governance: "governance-10.rightscale.com" }
+      "api.optima-apac.flexeraeng.com":{ governance: "governance-3.rightscale.com" }
     };
     result = map[rs_optima_host] || { governance: "governance-3.rightscale.com" };
   EOS
@@ -456,3 +456,4 @@ escalation "esc_reapply" do
       rs_project_id,
       $param_new_policy_schedule
   end
+
