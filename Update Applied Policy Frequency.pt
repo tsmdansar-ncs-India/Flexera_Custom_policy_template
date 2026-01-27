@@ -87,13 +87,7 @@ end
 # CLOUD WORKFLOW - MAIN RE-APPLY FUNCTION
 ################################################################################
 
-define cw_reapply(
-  $rows,
-  $rs_optima_host,
-  $rs_org_id,
-  $rs_project_id,
-  $param_new_policy_schedule
-) do
+define cw_reapply($rows, $rs_optima_host, $rs_org_id, $rs_project_id, $param_new_policy_schedule) do
 
   # Determine Automation API host
   $flexera_api_host = "api.flexera.com"
@@ -139,14 +133,14 @@ define cw_reapply(
         raise "No templateRef found on applied policy"
       end
 
-          # RRULE handling (frequency override only)
+      # RRULE handling (frequency override only)
       $rrule = ""
       if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != ""
         $rrule = to_s($param_new_policy_schedule)
       else
-        if inspect($ap["schedule"]) != "null"
-          $rrule = to_s($ap["schedule"]["rrule"])
-        end
+      if inspect($ap["schedule"]) != "null"
+        $rrule = to_s($ap["schedule"]["rrule"])
+      end
       end
 
       # Normalize MINUTELY
@@ -157,11 +151,12 @@ define cw_reapply(
 
       # Copy credentials and options
       $creds = $ap["credentials"]
-        $orig_opts = []
-        if inspect($ap["options"]) != "null"
-           $orig_opts = $ap["options"]
-        end
+      $orig_opts = []
+    if inspect($ap["options"]) != "null"
+      $orig_opts = $ap["options"]
+    end
 
+      # Overwrite schedule policy values in options[]
 	  $updated_opts = []
 	  foreach $opt in $orig_opts do
 	    $o = $opt
@@ -455,12 +450,13 @@ escalation "esc_reapply" do
   end
 
   run "cw_reapply",
-   	  $ds_common,
+      data,
       rs_optima_host,
       rs_org_id,
       rs_project_id,
       $param_new_policy_schedule
   end
+
 
 
 
