@@ -42,7 +42,7 @@
 #     - common:org:own
 #
 # REGION SUPPORT
-#   Resolves correct Automation + Governance hosts from rs_optima_host().
+#   Resolves correct Automation + Governance hosts from rs_optima_host.
 #     - NAM   → api.flexera.com     / governance‑3.rightscale.com
 #     - EU    → api.flexera.eu      / governance‑4.rightscale.com
 #     - APAC  → api.flexera.au      / governance‑3.rightscale.com
@@ -90,10 +90,9 @@ end
 define cw_reapply($rows, $param_new_policy_schedule) do
 
   $flexera_api_host = "api.flexera.com"
-
-  if rs_optima_host() == "api.optima-eu.flexeraeng.com"
+  if rs_optima_host == "api.optima-eu.flexeraeng.com"
     $flexera_api_host = "api.flexera.eu"
-  elsif rs_optima_host() == "api.optima-apac.flexeraeng.com"
+  elsif rs_optima_host == "api.optima-apac.flexeraeng.com"
     $flexera_api_host = "api.flexera.au"
   end
 
@@ -101,8 +100,8 @@ define cw_reapply($rows, $param_new_policy_schedule) do
     sub on_error: handle_error() do
 
       # GET existing applied policy from Automation
-      $href_get = "/policy/v1/orgs/" + to_s(rs_org_id()) +
-                  "/projects/" + to_s(rs_project_id()) +
+      $href_get = "/policy/v1/orgs/" + to_s(rs_org_id) +
+                  "/projects/" + to_s(rs_project_id) +
                   "/applied-policies/" + to_s($row["id"])
 
       $get_resp = http_request(
@@ -178,8 +177,8 @@ define cw_reapply($rows, $param_new_policy_schedule) do
         "options":     $updated_opts
       }
 
-      $create_href = "/policy/v1/orgs/" + to_s(rs_org_id()) +
-                     "/projects/" + to_s(rs_project_id()) +
+      $create_href = "/policy/v1/orgs/" + to_s(rs_org_id) +
+                     "/projects/" + to_s(rs_project_id) +
                      "/applied-policies"
 
       $post_resp = http_request(
@@ -208,13 +207,13 @@ define cw_reapply($rows, $param_new_policy_schedule) do
           raise "Delete failed: org-scoped policy missing policyAggregateId"
         end
 
-        $delete_href = "/policy/v1/orgs/" + to_s(rs_org_id()) +
+        $delete_href = "/policy/v1/orgs/" + to_s(rs_org_id) +
                        "/policy-aggregates/" + $agg_id
 
       else
         # project-scoped → delete via project endpoint
-        $delete_href = "/policy/v1/orgs/" + to_s(rs_org_id()) +
-                       "/projects/" + to_s(rs_project_id()) +
+        $delete_href = "/policy/v1/orgs/" + to_s(rs_org_id) +
+                       "/projects/" + to_s(rs_project_id) +
                        "/applied-policies/" + to_s($row["id"])
       end
 
@@ -266,7 +265,7 @@ end
 ################################################################################
 
 script "js_governance_host", type: "javascript" do
-  parameters "rs_optima_host()"
+  parameters "rs_optima_host"
   result "result"
   code <<-'EOS'
     var map = {
@@ -274,12 +273,12 @@ script "js_governance_host", type: "javascript" do
       "api.optima-eu.flexeraeng.com":  { governance: "governance-4.rightscale.com" },
       "api.optima-apac.flexeraeng.com":{ governance: "governance-3.rightscale.com" }
     };
-    result = map[rs_optima_host()] || { governance: "governance-3.rightscale.com" };
+    result = map[rs_optima_host] || { governance: "governance-3.rightscale.com" };
   EOS
 end
 
 datasource "ds_governance_host" do
-  run_script $js_governance_host, rs_optima_host()
+  run_script $js_governance_host, rs_optima_host
 end
 
 ################################################################################
@@ -290,7 +289,7 @@ datasource "ds_applied_policies_all" do
   request do
     auth   $auth_flexera
     host   val($ds_governance_host, "governance")
-    path   join(["/api/governance/projects/", rs_project_id(), "/applied_policies"])
+    path   join(["/api/governance/projects/", rs_project_id, "/applied_policies"])
     header "Api-Version", "1.0"
   end
 
@@ -452,4 +451,5 @@ escalation "esc_reapply" do
       data,
       $param_new_policy_schedule
   end
+
 
