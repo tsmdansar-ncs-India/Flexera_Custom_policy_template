@@ -87,14 +87,14 @@ end
 # CLOUD WORKFLOW - MAIN RE-APPLY FUNCTION
 ################################################################################
 
-define cw_reapply($rows, $rs_optima_host, $rs_org_id, $rs_project_id, $param_new_policy_schedule) do
+define cw_reapply($rows, $rs_org_id, $rs_project_id, $param_new_policy_schedule) do
 
   # Determine Automation API host
   $flexera_api_host = "api.flexera.com"
-  if $rs_optima_host == "api.optima-eu.flexeraeng.com"
+
+  if rs_optima_host == "api.optima-eu.flexeraeng.com"
     $flexera_api_host = "api.flexera.eu"
-  end
-  if $rs_optima_host == "api.optima-apac.flexeraeng.com"
+  elsif rs_optima_host == "api.optima-apac.flexeraeng.com"
     $flexera_api_host = "api.flexera.au"
   end
 
@@ -451,10 +451,10 @@ escalation "esc_reapply" do
 
   run "cw_reapply",
       data,
-      rs_optima_host,
       rs_org_id,
       rs_project_id,
       $param_new_policy_schedule
   end
+
 
 
