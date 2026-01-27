@@ -90,11 +90,12 @@ end
 define cw_reapply($rows, $param_new_policy_schedule) do
 
   $flexera_api_host = "api.flexera.com"
-  if rs_optima_host == "api.optima-eu.flexeraeng.com"
+  if rs_optima_host == "api.optima-eu.flexeraeng.com" then
     $flexera_api_host = "api.flexera.eu"
-  elsif rs_optima_host == "api.optima-apac.flexeraeng.com"
+  elsif rs_optima_host == "api.optima-apac.flexeraeng.com" then
     $flexera_api_host = "api.flexera.au"
   end
+
 
   foreach $row in $rows do
     sub on_error: handle_error() do
@@ -451,5 +452,6 @@ escalation "esc_reapply" do
       data,
       $param_new_policy_schedule
   end
+
 
 
