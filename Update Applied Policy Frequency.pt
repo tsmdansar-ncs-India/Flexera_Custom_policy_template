@@ -128,7 +128,7 @@ define cw_reapply($rows, $param_new_policy_schedule) do
           $tmpl_ref = to_s($ap["policyTemplate"]["ref"])
         end
       end
-      if $tmpl_ref == "" || inspect($tmpl_ref) == "null"
+      if $tmpl_ref == "" || inspect($tmpl_ref) == "null" then
         raise "No templateRef found on applied policy"
       end
 
@@ -196,15 +196,15 @@ define cw_reapply($rows, $param_new_policy_schedule) do
       end
 
       # DELETE the original (scope-aware)
-      if to_s($ap["scope"]) == "org"
+      if to_s($ap["scope"]) == "org" then
         # org-scoped → delete via policy-aggregates
         $agg_id = ""
-        if inspect($ap["policyAggregateId"]) != "null"
+        if inspect($ap["policyAggregateId"]) != "null" then
           $agg_id = to_s($ap["policyAggregateId"])
         elsif inspect($ap["policyAggregate"]) != "null"
           $agg_id = to_s($ap["policyAggregate"]["id"])
         end
-        if $agg_id == "" || inspect($agg_id) == "null"
+        if $agg_id == "" || inspect($agg_id) == "null" then
           raise "Delete failed: org-scoped policy missing policyAggregateId"
         end
 
@@ -232,7 +232,7 @@ define cw_reapply($rows, $param_new_policy_schedule) do
     end
   end
 
-  if inspect($$errors) != "null"
+  if inspect($$errors) != "null" then
     raise join($$errors, "\n")
   end
 end
@@ -242,7 +242,7 @@ end
 ################################################################################
 
 define handle_error() do
-  if !$$errors
+  if !$$errors then
     $$errors = []
   end
   $$errors << $_error["type"] + ": " + $_error["message"]
@@ -452,6 +452,7 @@ escalation "esc_reapply" do
       data,
       $param_new_policy_schedule
   end
+
 
 
 
