@@ -101,8 +101,8 @@ define cw_reapply($rows, $param_new_policy_schedule) do
     sub on_error: handle_error() do
 
       # GET existing applied policy from Automation
-      $href_get = "/policy/v1/orgs/" + to_s($rs_org_id) +
-                  "/projects/" + to_s($rs_project_id) +
+      $href_get = "/policy/v1/orgs/" + to_s(rs_org_id) +
+                  "/projects/" + to_s(rs_project_id) +
                   "/applied-policies/" + to_s($row["id"])
 
       $get_resp = http_request(
@@ -178,8 +178,8 @@ define cw_reapply($rows, $param_new_policy_schedule) do
         "options":     $updated_opts
       }
 
-      $create_href = "/policy/v1/orgs/" + to_s($rs_org_id) +
-                     "/projects/" + to_s($rs_project_id) +
+      $create_href = "/policy/v1/orgs/" + to_s(rs_org_id) +
+                     "/projects/" + to_s(rs_project_id) +
                      "/applied-policies"
 
       $post_resp = http_request(
@@ -208,13 +208,13 @@ define cw_reapply($rows, $param_new_policy_schedule) do
           raise "Delete failed: org-scoped policy missing policyAggregateId"
         end
 
-        $delete_href = "/policy/v1/orgs/" + to_s($rs_org_id) +
+        $delete_href = "/policy/v1/orgs/" + to_s(rs_org_id) +
                        "/policy-aggregates/" + $agg_id
 
       else
         # project-scoped → delete via project endpoint
-        $delete_href = "/policy/v1/orgs/" + to_s($rs_org_id) +
-                       "/projects/" + to_s($rs_project_id) +
+        $delete_href = "/policy/v1/orgs/" + to_s(rs_org_id) +
+                       "/projects/" + to_s(rs_project_id) +
                        "/applied-policies/" + to_s($row["id"])
       end
 
@@ -454,6 +454,7 @@ escalation "esc_reapply" do
       rs_project_id,
       $param_new_policy_schedule
   end
+
 
 
 
