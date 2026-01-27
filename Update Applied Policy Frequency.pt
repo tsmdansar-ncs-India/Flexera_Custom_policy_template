@@ -201,7 +201,7 @@ define cw_reapply($rows, $param_new_policy_schedule) do
         $agg_id = ""
         if inspect($ap["policyAggregateId"]) != "null" then
           $agg_id = to_s($ap["policyAggregateId"])
-        elsif inspect($ap["policyAggregate"]) != "null"
+        elsif inspect($ap["policyAggregate"]) != "null" then
           $agg_id = to_s($ap["policyAggregate"]["id"])
         end
         if $agg_id == "" || inspect($agg_id) == "null" then
@@ -452,6 +452,7 @@ escalation "esc_reapply" do
       data,
       $param_new_policy_schedule
   end
+
 
 
 
