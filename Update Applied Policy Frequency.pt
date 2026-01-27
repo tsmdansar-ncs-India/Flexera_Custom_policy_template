@@ -289,56 +289,6 @@ description "Enter a new policy execution frequency (RRULE). Existing schedule w
       $param_new_policy_schedule
 end
 
-################################################################################
-# CLOUD WORKFLOW HELPERS
-################################################################################
-
-# Clean CSV: remove spaces, tabs, CR, and newlines (CW-safe)
-  if $csv == "" || inspect($csv) == "null"
-    $list = []
-  else
-    $list = []
-    foreach $tok in split($csv, ",") do
-      $t = to_s($tok)
-
-      # remove spaces
-      $tmp_space = ""
-      foreach $p in split($t, " ") do
-        if $p != ""
-          $tmp_space = $tmp_space + $p
-        end
-      end
-
-      # remove tabs
-      $tmp_tab = ""
-      foreach $p2 in split($tmp_space, "\t") do
-        if $p2 != ""
-          $tmp_tab = $tmp_tab + $p2
-        end
-      end
-
-      # remove carriage returns
-      $tmp_cr = ""
-      foreach $p3 in split($tmp_tab, "\r") do
-        if $p3 != ""
-          $tmp_cr = $tmp_cr + $p3
-        end
-      end
-
-      # remove newlines
-      $clean = ""
-      foreach $p4 in split($tmp_cr, "\n") do
-        if $p4 != ""
-          $clean = $clean + $p4
-        end
-      end
-
-      if $clean != ""
-        $list << $clean
-      end
-    end
-  end
-end
 
 ################################################################################
 # CLOUD WORKFLOW - MAIN RE-APPLY FUNCTION
@@ -515,3 +465,4 @@ define handle_error() do
   $_error_behavior = "skip"
 
 end
+
