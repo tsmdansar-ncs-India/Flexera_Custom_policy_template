@@ -134,12 +134,11 @@ define cw_reapply($rows, $param_new_policy_schedule) do
 
       # RRULE handling (frequency override only)
       $rrule = ""
-      if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != ""
+
+      if inspect($param_new_policy_schedule) != "null" && $param_new_policy_schedule != "" then
         $rrule = to_s($param_new_policy_schedule)
-      else
-      if inspect($ap["schedule"]) != "null"
+      elsif inspect($ap["schedule"]) != "null" then
         $rrule = to_s($ap["schedule"]["rrule"])
-      end
       end
 
       # Normalize MINUTELY
@@ -452,6 +451,7 @@ escalation "esc_reapply" do
       data,
       $param_new_policy_schedule
   end
+
 
 
 
