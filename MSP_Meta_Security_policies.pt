@@ -1,7 +1,7 @@
 ###############################################################################
 # README
 ###############################################################################
-# MSP - Apply Custom Policies
+# MSP_Meta_Security_policies
 #
 # Purpose:
 #   Recommend and optionally apply Flexera CCO onboarding policy templates per selected cloud providers.
@@ -27,7 +27,7 @@
 # Active Policy List:
 #   https://github.com/flexera-public/policy_templates/blob/master/data/active_policy_list/active_policy_list.json
 
-name "MSP - Apply Custom Policies"
+name "MSP_Meta_Security_policies"
 rs_pt_ver 20180301
 type "policy"
 short_description "Recommend and optionally apply Flexera CCO onboarding policy templates per cloud provider."
@@ -396,7 +396,7 @@ end
 policy "pol_result" do
   # To Do: Recommended Policy Templates to apply
   validate $ds_result_fail_generally_recommended_templates do
-    summary_template "MSP - Apply Custom Policy Templates"
+    summary_template "MSP_Meta_Security_policies"
     detail_template <<-EOS
 # Apply Recommended Policy Templates
 The following recommended policy template(s) are not applied. Apply the most relevant items to increase visibility and optimization coverage.
